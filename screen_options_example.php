@@ -20,6 +20,40 @@ class scroptex
 	 */
 	const SLUG='scroptex';
 	/**
+	 * Names for option parameters
+	 *
+	 * We have to create and store this because WordPress in its infinite
+	 * wisdom calls set_screen_options() before nearly everything including
+	 * the screen.
+	 * 
+	 * @var array
+	 */
+	private $_option_names = array();
+
+	//
+	// INITALIZATIONS
+	// 
+	/**
+	 * Does Initialization of variables and the like
+	 */
+	public function __construct() {
+		$this->_option_names = array(
+			'per_page' => str_replace('-','_',self::SLUG).'_per_page',
+		);
+	}
+	/**
+	 * Note that this plugin only operates on the admin page.
+	 */
+	//public function run() {}
+	/**
+	 * Register actions on Admin pages (that can't be registered later)
+	 *
+	 * 1. Add settings page to admin menu
+	 * 2. Add filter to process screen option on settings page
+	 * 
+	 * @return void
+	 */
+	/**
 	 * This bootstraps the plugin and should be called on plugins_loaded
 	 * 
 	 * @return void
@@ -27,21 +61,25 @@ class scroptex
 	static public function bootstrap() {
 		$scroptex = new scroptex();
 		// could save to property to make it an instance method
-		// could trigger a hook here too
-	}
-	/**
-	 * Does all the initialization.
-	 * 
-	 * Note that this plugin only operates on the admin page.
-	 */
-	public function __construct() {
+		// bury hooks into run() and run_admin(), we can trigger hooks in
+		// those or not
 		if ( is_admin() ) {
-			// Stuff to do after initialization
-			//add_action( 'admin_init', array( $this, 'init') );
-			// Add Settings & ? pages to admin menu
-			add_action( 'admin_menu', array( $this, 'create_admin_menu' ) );		
+			$scroptex->run_admin();
 		}
 	}
+	public function run_admin() {
+		// Stuff to do after initialization
+		//add_action( 'admin_init', array( $this, 'admin_init') );
+		// 1. Add settings page to admin menu
+		add_action( 'admin_menu', array( $this, 'create_admin_menu' ) );
+
+		// 2. Add filter to process screen option (note, we need all 3 parameters)
+		// Note: this filter is called after init and wp-loaded but BEFORE admin_init and load-*
+		add_filter( 'set-screen-option', array( $this, 'filter_screen_option'), 10, 3 );
+	}
+	//
+	// PROCESSING ACTIONS
+	// 
 	/**
 	 * Add the admin menu page to wp-admin
 	 *
@@ -61,15 +99,42 @@ class scroptex
 		}
 	}
 	/**
-	 * Do work on settings page before rendering
+	 * Process screen options for the things we know
 	 *
-	 * 1. Add Settings contextual help tabs
-	 * 2. Add Settings contextual help sidebar
+	 * This is called before get_current_screen() is set.
+	 * 
+	 * @param  mixed  $status current filter return state
+	 * @param  string $option name of the option being processed
+	 * @param  mixed  $value  value to set it to
+	 * @return mixed          return state with this pages options processed
+	 */
+	public function filter_screen_option( $status, $option, $value ) {
+		switch ( $option ) {
+			case $this->_option_names['per_page']:
+				$value = (int) $value;
+				if ($value < 1) { $value = 10; } //the default
+				return $value;
+			default:
+				return $status;
+		}
+	}
+	/**
+	 * Run on init
+	 * @return [type] [description]
+	 */
+	public function admin_init() {
+	}
+	/**
+	 * Do work on Settings page before rendering
+	 *
+	 * 1. Add contextual help tabs
+	 * 2. Add contextual help sidebar
+	 * 3. Add per_page screen option
 	 * 
 	 * @return  void 
 	 */
 	public function loading_settings_page() {
-		// 1. Add Settings contextual help tabs
+		// 1. Add contextual help tabs
 		//add_filter('contextual_help', array($this,'filter_settings_help'), 10, 3); // old style
 		$screen = get_current_screen();
 		$screen->remove_help_tabs();
@@ -86,18 +151,54 @@ class scroptex
 			//'callback' => array($this,'show_settings_help_flickrauth')
 		) );
 
-		// 2. Add Settings contextual help sidebar
+		// 2. Add contextual help sidebar
 		$screen->set_help_sidebar( $this->_get_settings_help_sidebar() );
+
+		// 3. Add per_page screen option
+		add_screen_option(
+			'per_page', // built-in type
+			array(
+				'label' => __( 'Counts', self::SLUG ),         // Label to use in screen_options
+				'default' => 10,                               // default # when empty
+				'option'  => $this->_option_names['per_page'], // db option name
+			)
+		);
+
 	}
+
+	//
+	// OUTPUTS
+	// 
 	/**
 	 * Output settings page
 	 *
+	 * Outputs the following
+	 * 1. Title
+	 * 2. A Count from 1 to the number of "per_page" options
 	 * @return  void
 	 */
 	public function show_settings_page() {
+		//$screen = get_current_screen(); var_dump( $screen->get_option( 'per_page', 'option') ); die;
+		$screen = get_current_screen();
+		$option_name = $screen->get_option( 'per_page', 'option' );
+		$per_page = get_user_meta( get_current_user_id(), $option_name, true );
+		if ( empty($per_page) || $per_page < 1 ) {
+			$per_page = $screen->get_option( 'per_page', 'default' );
+		}
 ?>
 <div class="wrap">
 	<h2><?php esc_html_e('Dummy Options', self::SLUG) ?></h2>
+		<table class="form-table">
+			<!-- begin api screen options stuff -->
+			<tr class>
+				<th scope="row"><?php _e('Count von Count', self::SLUG); ?></th>
+				<td><?php
+			for ($i=0; $i<$per_page; ++$i) {
+				echo $i+1 . '<br />';
+			}
+?></td>
+			</tr>
+		</table>
 </div>
 <?php
 	}
