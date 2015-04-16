@@ -24,21 +24,39 @@ class scroptex
 	 */
 	const VERSION='1.0';
 	/**
-	 * Names for option parameters
+	 * Option information
 	 *
-	 * We have to create and store this because WordPress in its infinite
-	 * wisdom calls set_screen_options() before nearly everything including
-	 * the screen.
+	 * This is an array of hashes indexed by the option type. (The only reserved
+	 * type is "per_page").
+	 *
+	 * It has the following params:
+	 * - name: the option key name (we have to store this because WordPress in
+	 *         its infinite wisdom calls set_screen_options() before nearly
+	 *         everything, but especially before screen is set up.
+	 * - default: the default value
+	 * - display: the display name
 	 * 
 	 * @var array
 	 */
-	private $_option_names = array();
-	/**
-	 * Default values
-	 */
-	private $_opt_defaults = array(
-		'per_page' => 3,
+	private $_option_info = array(
+		'per_page' => array(
+			'name'    => 'scroptex_per_page',
+			'default' => 3,
+		),
+		'bgcolor'  => array(
+			'name'    => 'scroptex_bgcolor',
+			'default' => 'transparent',
+		),
 	);
+	/**
+	 * Rendered names of the options
+	 *
+	 * This is separate from the checkboxes hidden column because of the
+	 * array_merge() needed to generate filter.
+	 * 
+	 * @var array
+	 */
+	private $_opt_display_names = array();
 	/**
 	 * Hidden checkboxes stored as hidden columns.
 	 *
@@ -55,9 +73,9 @@ class scroptex
 	 * Does Initialization of variables and the like
 	 */
 	public function __construct() {
-		$this->_option_names = array(
-			'per_page' => str_replace('-','_',self::SLUG).'_per_page',
-		);
+		$this->_option_info['per_page']['display'] = __( 'Counts', self::SLUG );
+		$this->_option_info['bgcolor']['display']  = __( 'Background Color', self::SLUG );
+
 		$this->_option_checkboxes = array(
 			'arabic_counting' => __( 'Count from zero', self::SLUG ),
 			'eight_the_great' => __( 'Sing <i>Eight the Great</i>', self::SLUG ),
@@ -97,8 +115,8 @@ class scroptex
 		// Note: this filter is called after init and wp-loaded but BEFORE admin_init and load-*
 		add_filter( 'set-screen-option', array( $this, 'filter_screen_option'), 10, 3 );
 
-		// Stuff to do after initialization
-		//add_action( 'admin_init', array( $this, 'admin_init') );
+		// 3. Stuff to do after initialization
+		add_action( 'admin_init', array( $this, 'admin_init') );
 	}
 	//
 	// PROCESSING ACTIONS
@@ -125,6 +143,7 @@ class scroptex
 	 * Process screen options for the things we know (that aren't automatically handled).
 	 *
 	 * FYWP: This is called before get_current_screen() is set.
+	 * {@see https://core.trac.wordpress.org/ticket/24786#comment:8}
 	 * 
 	 * @param  mixed  $status current filter return state
 	 * @param  string $option name of the option being processed
@@ -133,9 +152,12 @@ class scroptex
 	 */
 	public function filter_screen_option( $status, $option, $value ) {
 		switch ( $option ) {
-			case $this->_option_names['per_page']:
+			case $this->_option_info['per_page']['name']:
 				$value = (int) $value;
-				if ($value < 1) { $value = $this->_opt_defaults['per_page']; } //the default
+				if ($value < 1) { $value = $this->_option_info['per_page']['default']; } //the default
+				return $value;
+			case $this->_option_info['bgcolor']['name']:
+				// add any css color validation here
 				return $value;
 			default:
 				return $status;
@@ -143,9 +165,67 @@ class scroptex
 	}
 	/**
 	 * Run on init
-	 * @return void
+	 *
+	 * This loads the ajax action for handling the custom screen option
+	 * 
+	 * @return void 
 	 */
-	//public function admin_init() {}
+	public function admin_init() {
+		// Add ajax server for handling ajax screen options
+		add_action( 'wp_ajax_scroptex_set_value', array($this, 'handle_ajax_screen_option_set') );
+	}
+	/**
+	 * Handle the ajax call for setting custom screen options through the
+	 * ajax API.
+	 *
+	 * FYWP: Note that we could just piggy back off of set_screen_options() but
+	 * that code was hard-coded to do a redirect which isn't the recommended way
+	 * of handling ajax calls. The developers should have made it a default
+	 * parameter with the option of returning a boolean if it is set.
+	 * {@see https://developer.wordpress.org/reference/functions/set_screen_options/}
+	 * 
+	 * @return void  Should never return, should die
+	 */
+	public function handle_ajax_screen_option_set() {
+		// we are pirating the nonce created in screen for screen options :-)
+		check_ajax_referer('screen-options-nonce','screenoptionnonce');
+		if ( isset($_POST['wp_screen_options']) && is_array($_POST['wp_screen_options']) ) {
+ 			$option = $_POST['wp_screen_options']['option'];
+	        $value = $_POST['wp_screen_options']['value'];
+	        // validate it's a scren option
+	        $value = apply_filters( 'set-screen-option', false, $option, $value );
+
+	        if ( false === $value ) {
+	        	wp_send_json(array(
+	        		'stat' => 'fail',
+	        		'code' => -100,
+	        		'msg'  => 'Unsupported option.',
+	        	));
+	        	// will die
+	        }
+
+	        if ( !$user = wp_get_current_user() ) {
+	        	wp_send_json(array(
+	        		'stat' => 'fail',
+	        		'code' => -101,
+	        		'msg'  => 'Unknown user',
+	        	));
+	        	// will die
+	        }
+	        // FYWP: inconsistent behavior between user_meta and user_option
+	        // in set_screen_option
+	        update_user_meta( $user->ID, $option, $value);
+	        wp_send_json(array(
+	        	'stat' => 'ok',
+	        	'action' => array( 'option'=>$option, 'value'=>$value ),
+	        ));
+		}
+		wp_send_json(array(
+			'stat' => 'fail',
+			'code' => -102,
+			'msg'  => 'Missing or improperly formatted wp_screen_options.',
+		));
+	}
 	/**
 	 * Do work on Settings page before rendering
 	 *
@@ -157,8 +237,9 @@ class scroptex
 	 * 6. Trigger adding of metaboxes
 	 * 7. Queue javascript for metabox handling (just in case)
 	 * 8. Add hidden columns
-	 * 9. Add javascript handling of screen options
-	 * 10. Add stylesheet for page
+	 * 9. Add filter to add arbitrary screen options
+	 * 10. Add javascript handling of screen options
+	 * 11. Add stylesheet for page
 	 * 
 	 * @return  void 
 	 */
@@ -184,12 +265,13 @@ class scroptex
 		$screen->set_help_sidebar( $this->_get_settings_help_sidebar() );
 
 		// 3. Add reserved "per_page" screen option
+		$optinfo = $this->_option_info['per_page'];
 		$screen->add_option(
 			'per_page', // built-in type
 			array(
-				'label' => __( 'Counts', self::SLUG ),         // Label to use in screen_options
-				'default' => $this->_opt_defaults['per_page'], // default # when empty
-				'option'  => $this->_option_names['per_page'], // db option name
+				'label'   => $optinfo['display'], // Label to use in screen_options
+				'default' => $optinfo['default'], // default # when empty
+				'option'  => $optinfo['name'],    // db option name
 			)
 		);
 
@@ -214,6 +296,7 @@ class scroptex
 		// Why didn't they modify get_hidden_columns() with the $use_defaults
 		// code and a default_hidden_columns filter? I have no idea. Clearly
 		// core devs are on crack.
+		// see: https://wordpress.org/support/topic/default-custom-post-column-to-off-in-screen-options
 		// see: https://core.trac.wordpress.org/ticket/31989
 		// If the above patch is applied, then the next line sets all the
 		// hidden columns to default off :-)
@@ -221,8 +304,13 @@ class scroptex
 		
 		// FYWP: column handling code is in admin common.js, while metabox
 		// handling code is in postbox. Why?
+		
+		// 9. add filter to add arbitrary screen options
+		// // see: https://developer.wordpress.org/reference/hooks/screen_settings/
+		add_filter( 'screen_settings', array( $this, 'filter_settings_screen_options' ), 10, 2 );	
+		// we could $screen->add_option() here but it gives us nothing.
 
-		// 9. Add javascript handling for screen options
+		// 10. Add javascript handling for screen options
 		wp_enqueue_script(
 			self::SLUG.'-screen-options-script',             // handle
 			plugin_dir_url( __FILE__ ).'/admin-settings.js', // src
@@ -231,7 +319,7 @@ class scroptex
 			true                                             // ok in footer
 		);
 
-		// 10. Add stylesheet for page
+		// 11. Add stylesheet for page
 		wp_enqueue_style(
 			self::SLUG.'-screen-options-style',               // handle
 			plugin_dir_url( __FILE__ ).'/admin-settings.css', // src
@@ -245,9 +333,10 @@ class scroptex
 	 */
 	public function add_settings_metas() {
 		$screen = get_current_screen();
+		// see: https://codex.wordpress.org/Plugin_API/Action_Reference/add_meta_boxes
 		add_meta_box(
 			self::SLUG.'-portrait',                        // HTML id
-			__( 'Portrait', self::SLUG ),                  // title of edit screen
+			__( 'Count von Count', self::SLUG ),                  // title of edit screen
 			array( $this, 'show_settings_meta_portrait' ), // renderer callback,
 			$screen->id,                                   // register to this page only
 			'side'                                         // where
@@ -292,6 +381,10 @@ class scroptex
 		if ( empty($per_page) || $per_page < 1 ) {
 			$per_page = $screen->get_option( 'per_page', 'default' );
 		}
+		$bgcolor = get_user_option( $this->_option_info['bgcolor']['name'] );
+		if ( empty($bgcolor) ) {
+			$bgcolor = $this->_option_info['bgcolor']['default'];
+		}
 ?>
 <div class="wrap">
 	<h2><?php esc_html_e('Dummy Options', self::SLUG) ?></h2>
@@ -299,7 +392,7 @@ class scroptex
 		<?php wp_nonce_field( 'closedpostboxes', 'closedpostboxesnonce', false ); ?>
 		<div id="poststuff">
 			<div id="post-body" class="metabox-holder columns-2">
-				<div id="post-body-content"><?php
+				<div id="post-body-content" style="background-color:<?php echo $bgcolor; ?>;"><?php
 		printf(
 			'<span id="display_arabic_counting" style="%s">%s</span>',
 			( $this->_column_is_hidden( 'arabic_counting') ) ? 'display:none;' : '',
@@ -348,15 +441,16 @@ class scroptex
 </div>
 <br clear="both" />
 <?php
-		/*
+		/* //debugging
 		var_dump(array(
 			'screen_id' => $screen->id,
 			'manage_$SID_columnshidden' => get_user_option( 'managesettings_page_scroptexcolumnshidden'),
 			'per_page' => $screen->get_option( 'per_page', 'option' ),
 			'per_page_option' => get_user_option( 'scroptex_per_page' ),
+			'bgcolor_option' => get_user_option( 'scroptex_bgcolor' ),
 			'closed_postboxes' => get_user_option( 'closedpostboxes_settings_page_scroptex'),
 			'metabox_hidden' => get_user_option( 'metaboxhidden_settings_page_scroptex'),
-			'screen' => $screen,
+			//'screen' => $screen,
 		));
 		/* */
 	}
@@ -388,9 +482,28 @@ class scroptex
 	private function _get_settings_help_tab() {
 		return '<p>' . __( 'Or you could put content on another screen this way and use another tab to explain the hidden screen options features.', self::SLUG ) . '</p>';
 	}
-
 	/**
-	 * Output the metabox for portraits
+	 * Adds custom screen options to page
+	 * 
+	 * @param  string    $screen_settings The current state of the return value
+	 * @param  WP_SCREEN $screen the screen object that triggered this
+	 * @return string    form element html with the custom screen options tacked on
+	 */
+	public function filter_settings_screen_options($screen_settings, $screen) {
+		$opt_info = $this->_option_info['bgcolor'];
+		$opt_value = get_user_option( $opt_info['name']);
+		if ( $opt_value === false ) {
+			$opt_value = $opt_info['default'];
+		}
+		$screen_settings .= sprintf(
+			'<label for="%1$s">%2$s</label> <input class="screen-bgcolor" name="%1$s" id="%1$s" value="%3$s" />',
+			$opt_info['name'],
+			$opt_info['display'],
+			$opt_value
+		);
+		return $screen_settings;
+	}
+	/** * Output the metabox for portraits
 	 * 
 	 * @return void
 	 */
@@ -413,7 +526,6 @@ class scroptex
 <?php
 		return ob_get_clean();
 	}
-
 	//
 	// UTILITY FUNCTIONS
 	//
