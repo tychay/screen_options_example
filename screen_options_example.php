@@ -49,15 +49,6 @@ class scroptex
 		),
 	);
 	/**
-	 * Rendered names of the options
-	 *
-	 * This is separate from the checkboxes hidden column because of the
-	 * array_merge() needed to generate filter.
-	 * 
-	 * @var array
-	 */
-	private $_opt_display_names = array();
-	/**
 	 * Hidden checkboxes stored as hidden columns.
 	 *
 	 * The key is the id of column, the value is the display name
@@ -192,7 +183,7 @@ class scroptex
 		if ( isset($_POST['wp_screen_options']) && is_array($_POST['wp_screen_options']) ) {
  			$option = $_POST['wp_screen_options']['option'];
 	        $value = $_POST['wp_screen_options']['value'];
-	        // validate it's a scren option
+	        // validate it's a screen option
 	        $value = apply_filters( 'set-screen-option', false, $option, $value );
 
 	        if ( false === $value ) {
@@ -208,7 +199,7 @@ class scroptex
 	        	wp_send_json(array(
 	        		'stat' => 'fail',
 	        		'code' => -101,
-	        		'msg'  => 'Unknown user',
+	        		'msg'  => 'Unknown user.',
 	        	));
 	        	// will die
 	        }
@@ -236,7 +227,7 @@ class scroptex
 	 * 5. Set defaults for metaboxes
 	 * 6. Trigger adding of metaboxes
 	 * 7. Queue javascript for metabox handling (just in case)
-	 * 8. Add hidden columns
+	 * 8. Add hidden columns (and set defaults)
 	 * 9. Add filter to add arbitrary screen options
 	 * 10. Add javascript handling of screen options
 	 * 11. Add stylesheet for page
@@ -291,7 +282,7 @@ class scroptex
 		// 8. Add hidden columns
 		add_filter( 'manage_'.$screen->id.'_columns', array($this, 'filter_hidden_columns') );
 
-		// FYWP: There is no column defaults witout modifying everyone's
+		// FYWP: There is no column defaults without modifying everyone's
 		// user_meta. There _IS_ defaults for meta boxes because of a filter.
 		// Why didn't they modify get_hidden_columns() with the $use_defaults
 		// code and a default_hidden_columns filter? I have no idea. Clearly
@@ -301,12 +292,16 @@ class scroptex
 		// If the above patch is applied, then the next line sets all the
 		// hidden columns to default off :-)
 		add_filter( 'default_hidden_columns', array( $this, 'filter_hidden_columns' ) );
-		
+		// Instead, this will work:
+		add_filter( 'get_user_option_manage'.$screen->id.'columnshidden', array($this, 'filter_default_hidden_columns') );
+		// Uncomment to reset(for testing)
+		//delete_user_option( get_current_user_id(), 'managesettings_page_scroptexcolumnshidden', true );
+
 		// FYWP: column handling code is in admin common.js, while metabox
 		// handling code is in postbox. Why?
 		
 		// 9. add filter to add arbitrary screen options
-		// // see: https://developer.wordpress.org/reference/hooks/screen_settings/
+		//    see: https://developer.wordpress.org/reference/hooks/screen_settings/
 		add_filter( 'screen_settings', array( $this, 'filter_settings_screen_options' ), 10, 2 );	
 		// we could $screen->add_option() here but it gives us nothing.
 
@@ -359,6 +354,21 @@ class scroptex
 	 */
 	function filter_hidden_columns( $columns ) {
 		return array_merge( $columns, $this->_option_checkboxes );
+	}
+	/**
+	 * Inject list of columns to turn off by default
+	 *
+	 * This version hides them all by default.
+	 */
+	function  filter_default_hidden_columns( $columns ) {
+		// Techically, when all columns are checked it sends an array
+		// consisting of an empty string, checking for the false condition
+		// depends on this artifact, but let's be safe and depend on the
+		// artifact of the get_user_option() which returns false if deleted.
+		if ( $columns === false ) {
+			return array_keys($this->_option_checkboxes);
+		}
+		return $columns;
 	}
 
 	//
